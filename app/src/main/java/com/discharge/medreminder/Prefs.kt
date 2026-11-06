@@ -41,6 +41,14 @@ object Prefs {
     fun followUp(ctx: Context): Int = p(ctx).getInt("followUp", 15)
     fun setFollowUp(ctx: Context, minutes: Int) { p(ctx).edit().putInt("followUp", minutes).commit() }
 
+    /** Unix timestamp for the next review, or 0 when no review is scheduled. */
+    fun reviewAt(ctx: Context): Long = p(ctx).getLong("reviewAt", 0L)
+    fun setReviewAt(ctx: Context, timestamp: Long) { p(ctx).edit().putLong("reviewAt", timestamp).commit() }
+
+    /** Whether medication reminders should be read aloud. */
+    fun readAloud(ctx: Context): Boolean = p(ctx).getBoolean("readAloud", false)
+    fun setReadAloud(ctx: Context, enabled: Boolean) { p(ctx).edit().putBoolean("readAloud", enabled).commit() }
+
     /** Accessibility option for larger text across the app. */
     fun largeText(ctx: Context): Boolean = p(ctx).getBoolean("largeText", false)
     fun setLargeText(ctx: Context, enabled: Boolean) { p(ctx).edit().putBoolean("largeText", enabled).commit() }
