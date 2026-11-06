@@ -1,0 +1,9 @@
+Discharge Med Reminder turns the medication sheet you receive when leaving hospital into timely phone reminders.
+
+* Photograph the sheet (up to 5 pages); the app finds the page, straightens it and removes shadows.
+* Text is read on the phone with Tesseract OCR – fully offline, no account, no internet permission.
+* Understands common prescription styles: 1-0-1, OD/BD/TDS/QID, every 8 hours, before/after food, SOS, weekly and alternate-day medicines, "x 5 days".
+* You check and correct every medicine before reminders are set.
+* Notifications with Taken / Snooze, an automatic repeat if a dose is not marked as taken, a "Today" checklist, and a shareable schedule for carers.
+
+This is a reminder aid, not a medical device. Always follow the printed sheet and your doctor.

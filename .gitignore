@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+# downloaded at build time
+app/src/main/assets/tessdata/

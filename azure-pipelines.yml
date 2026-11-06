@@ -1,0 +1,17 @@
+trigger:
+  - main
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: "17"
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+  - script: |
+      wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
+      unzip -q gradle-8.9-bin.zip
+      ./gradle-8.9/bin/gradle assembleDebug testDebugUnitTest --no-daemon
+    displayName: Build APK
+  - publish: app/build/outputs/apk/debug/app-debug.apk
+    artifact: DischargeMedReminder-apk
