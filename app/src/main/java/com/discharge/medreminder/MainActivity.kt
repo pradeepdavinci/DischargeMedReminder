@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.activity.ComponentActivity
@@ -183,6 +184,13 @@ class MainActivity : ComponentActivity() {
 
     // ---------- home screen ----------
 
+    private fun divider(): View = View(this).apply {
+        setBackgroundColor(if (isDarkTheme()) 0xFF334155.toInt() else 0xFFD0DCE5.toInt())
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
+            setMargins(0, dp(6), 0, dp(6))
+        }
+    }
+
     private fun refresh() {
         rescanBox.removeAllViews()
         val lastUris = MedStore.lastScanUris(this)
@@ -211,7 +219,7 @@ class MainActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         val today = todayMidnight()
 
-        // Today's doses with taken / skipped / overdue / upcoming status
+        // Today's doses with clean 2-row layout so medicine names never wrap into a narrow column
         todayBox.removeAllViews()
         val doses = meds.flatMap { m ->
             if (m.times.isEmpty() || !Scheduler.isDoseDay(m, today)) emptyList()
@@ -220,37 +228,52 @@ class MainActivity : ComponentActivity() {
         if (doses.isNotEmpty()) {
             todayBox.addView(label("Today", 19f, true))
             val c = card()
-            for ((time, m, i) in doses) {
+            doses.forEachIndexed { doseIdx, (time, m, i) ->
+                if (doseIdx > 0) c.addView(divider())
                 val due = Scheduler.dueOn(m, i, today)
                 val taken = Doses.isTaken(this, m, i, due)
                 val skipReason = Doses.skipReason(this, m, i, due)
                 val skipped = skipReason != null
                 val itemBox = vertical().apply { setPadding(0, dp(4), 0, dp(4)) }
-                val row = horizontal()
+
+                // Row 1: Time/Status badge + full-width medicine name & dose
+                val topRow = horizontal()
                 val statusBadge = when {
-                    taken -> badge("✓ Taken", 0xFF16A34A.toInt())
-                    skipped -> badge("⏭ Skipped", 0xFF64748B.toInt())
-                    due < now -> badge("⚠ Overdue", 0xFFDC2626.toInt())
-                    else -> badge("• $time", 0xFF2563EB.toInt())
+                    taken -> badge("✓ $time Taken", 0xFF16A34A.toInt())
+                    skipped -> badge("⏭ $time Skipped", 0xFF64748B.toInt())
+                    due < now -> badge("⚠ $time Overdue", 0xFFDC2626.toInt())
+                    else -> badge("🕒 $time", 0xFF2563EB.toInt())
                 }
-                row.addView(statusBadge)
-                row.addView(label("  $time  ${m.name} ${m.dose}".trimEnd(), 15f, !taken && !skipped && due < now), weighted())
+                topRow.addView(statusBadge)
+                val medTitle = listOf(m.name, m.dose).filter { it.isNotBlank() }.joinToString(" — ")
+                topRow.addView(
+                    label("  $medTitle", 16f, true).apply { setPadding(dp(8), dp(4), 0, dp(4)) },
+                    weighted()
+                )
+                itemBox.addView(topRow)
+
+                if (m.note.isNotBlank()) {
+                    itemBox.addView(label(m.note, 13f))
+                }
+                if (skipped && !skipReason.isNullOrBlank()) {
+                    itemBox.addView(label("Reason: $skipReason", 12f))
+                }
+
+                // Row 2: Action buttons on their own row with plenty of breathing room
+                val actionRow = horizontal()
                 when {
                     taken -> {
-                        row.addView(button("Undo") { Doses.unmarkTaken(this, m, i, due); refresh() })
+                        actionRow.addView(button("↩ Undo taken") { Doses.unmarkTaken(this, m, i, due); refresh() }, weighted())
                     }
                     skipped -> {
-                        row.addView(button("Undo") { Doses.unmarkSkipped(this, m, i, due); refresh() })
+                        actionRow.addView(button("↩ Undo skip") { Doses.unmarkSkipped(this, m, i, due); refresh() }, weighted())
                     }
                     else -> {
-                        row.addView(button("Taken") { Doses.markTaken(this, m, i, due); refresh() })
-                        row.addView(button("Skip") { promptSkipDose(m, i, due) })
+                        actionRow.addView(button("✓ Mark taken") { Doses.markTaken(this, m, i, due); refresh() }, weighted())
+                        actionRow.addView(button("⏭ Skip") { promptSkipDose(m, i, due) }, weighted())
                     }
                 }
-                itemBox.addView(row)
-                if (skipped && !skipReason.isNullOrBlank()) {
-                    itemBox.addView(label("   Reason: $skipReason", 12f))
-                }
+                itemBox.addView(actionRow)
                 c.addView(itemBox)
             }
             todayBox.addView(c)
@@ -453,7 +476,7 @@ class MainActivity : ComponentActivity() {
             if (y > 760f) break
             val line1 = "• ${m.name} ${m.dose}".trim() + " — " +
                 (if (m.times.isEmpty()) "As needed (SOS)" else m.times.joinToString(", ") + everyText(m))
-            val line2 = "   Course: ${m.days} days (${dfmt.format(Date(m.startMillis))} – ${dfmt.format(Date(Scheduler.endMillis(m) - 1)))}" +
+            val line2 = "   Course: ${m.days} days (${dfmt.format(Date(m.startMillis))} – ${dfmt.format(Date(Scheduler.endMillis(m) - 1))})" +
                 if (m.note.isNotBlank()) " · ${m.note}" else ""
             canvas.drawText(line1.take(95), 36f, y, bodyPaint); y += 14f
             canvas.drawText(line2.take(100), 36f, y, bodyPaint); y += 16f

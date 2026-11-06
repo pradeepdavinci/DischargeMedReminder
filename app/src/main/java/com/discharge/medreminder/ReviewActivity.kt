@@ -122,34 +122,39 @@ class ReviewActivity : ComponentActivity() {
     private fun refreshTimeChips(row: Row) {
         row.chipsBox.removeAllViews()
         val current = parseTimesField(row.times)
-        val chipsRow = horizontal()
         if (current.isEmpty()) {
-            chipsRow.addView(badge("As needed (SOS – no alarms)", 0xFF64748B.toInt()))
+            val emptyRow = horizontal()
+            emptyRow.addView(badge("As needed (SOS – no alarms)", 0xFF64748B.toInt()))
+            row.chipsBox.addView(emptyRow)
         } else {
-            current.forEachIndexed { idx, t ->
-                chipsRow.addView(button("🕒 $t") {
-                    AlertDialog.Builder(this)
-                        .setTitle("Dose time $t")
-                        .setItems(arrayOf("Change time", "Remove $t")) { _, which ->
-                            if (which == 0) {
-                                pickTime(t) { newTime ->
+            current.chunked(3).forEach { chunk ->
+                val chipsRow = horizontal()
+                chunk.forEach { t ->
+                    val idx = current.indexOf(t)
+                    chipsRow.addView(button("🕒 $t") {
+                        AlertDialog.Builder(this)
+                            .setTitle("Dose time $t")
+                            .setItems(arrayOf("Change time", "Remove $t")) { _, which ->
+                                if (which == 0) {
+                                    pickTime(t) { newTime ->
+                                        val updated = parseTimesField(row.times)
+                                        if (idx in updated.indices) updated[idx] = newTime else updated.add(newTime)
+                                        row.times.setText(updated.distinct().sorted().joinToString(", "))
+                                        refreshTimeChips(row)
+                                    }
+                                } else {
                                     val updated = parseTimesField(row.times)
-                                    if (idx in updated.indices) updated[idx] = newTime else updated.add(newTime)
-                                    row.times.setText(updated.distinct().sorted().joinToString(", "))
+                                    updated.remove(t)
+                                    row.times.setText(updated.joinToString(", "))
                                     refreshTimeChips(row)
                                 }
-                            } else {
-                                val updated = parseTimesField(row.times)
-                                updated.remove(t)
-                                row.times.setText(updated.joinToString(", "))
-                                refreshTimeChips(row)
                             }
-                        }
-                        .show()
-                })
+                            .show()
+                    }, weighted())
+                }
+                row.chipsBox.addView(chipsRow)
             }
         }
-        row.chipsBox.addView(chipsRow)
 
         val actionsRow = horizontal()
         actionsRow.addView(button("+ Add time") {
