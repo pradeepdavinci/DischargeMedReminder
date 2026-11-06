@@ -106,7 +106,9 @@ object MedStore {
         val raw = p(ctx).getString("skipped", "{}") ?: "{}"
         val obj = try { JSONObject(raw) } catch (e: Exception) { JSONObject() }
         val cutoff = Doses.dayKey(System.currentTimeMillis() - 60L * 86_400_000L)
-        val keys = obj.keys().asSequence().toList()
+        val keys = mutableListOf<String>()
+        val iter = obj.keys()
+        while (iter.hasNext()) keys.add(iter.next())
         for (k in keys) {
             if ((k.split("|").getOrNull(1) ?: "") < cutoff) obj.remove(k)
         }

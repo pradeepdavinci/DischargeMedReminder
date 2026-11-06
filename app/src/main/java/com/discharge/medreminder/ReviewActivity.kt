@@ -67,7 +67,7 @@ class ReviewActivity : ComponentActivity() {
             rescanRow.addView(button("📷 Rescan new sheet") {
                 startActivity(
                     Intent(this, MainActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         .putExtra("triggerRescan", true)
                 )
                 finish()

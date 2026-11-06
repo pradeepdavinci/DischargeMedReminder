@@ -27,24 +27,28 @@ object ImageTools {
         val out = mutableListOf<Uri>()
         val dir = File(ctx.cacheDir, "photos").apply { mkdirs() }
         val pfd = ctx.contentResolver.openFileDescriptor(pdfUri, "r") ?: return emptyList()
-        pfd.use { descriptor ->
-            PdfRenderer(descriptor).use { renderer ->
-                val count = minOf(renderer.pageCount, maxPages)
-                for (i in 0 until count) {
-                    renderer.openPage(i).use { page ->
-                        val scale = 2200f / max(1, max(page.width, page.height))
-                        val w = max(1, (page.width * scale).roundToInt())
-                        val h = max(1, (page.height * scale).roundToInt())
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        Canvas(bmp).drawColor(Color.WHITE)
-                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-                        val f = File(dir, "pdf_page_${System.currentTimeMillis()}_$i.jpg")
-                        FileOutputStream(f).use { stream -> bmp.compress(Bitmap.CompressFormat.JPEG, 92, stream) }
-                        bmp.recycle()
-                        out.add(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f))
-                    }
+        val renderer = PdfRenderer(pfd)
+        try {
+            val count = minOf(renderer.pageCount, maxPages)
+            for (i in 0 until count) {
+                val page = renderer.openPage(i)
+                try {
+                    val scale = 2200f / max(1, max(page.width, page.height))
+                    val w = max(1, (page.width * scale).roundToInt())
+                    val h = max(1, (page.height * scale).roundToInt())
+                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    Canvas(bmp).drawColor(Color.WHITE)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                    val f = File(dir, "pdf_page_${System.currentTimeMillis()}_$i.jpg")
+                    FileOutputStream(f).use { stream -> bmp.compress(Bitmap.CompressFormat.JPEG, 92, stream) }
+                    bmp.recycle()
+                    out.add(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f))
+                } finally {
+                    page.close()
                 }
             }
+        } finally {
+            renderer.close()
         }
         return out
     }

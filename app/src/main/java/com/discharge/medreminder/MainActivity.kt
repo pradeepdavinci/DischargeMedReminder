@@ -109,20 +109,6 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-
-        if (intent.getBooleanExtra("triggerRescan", false)) {
-            intent.removeExtra("triggerRescan")
-            showRescanDialog()
-        }
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        if (intent?.getBooleanExtra("triggerRescan", false) == true) {
-            intent.removeExtra("triggerRescan")
-            showRescanDialog()
-        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -134,6 +120,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        if (intent?.getBooleanExtra("triggerRescan", false) == true) {
+            intent.removeExtra("triggerRescan")
+            showRescanDialog()
+        }
     }
 
     // ---------- capturing & rescanning pages ----------
