@@ -19,6 +19,7 @@ class CropActivity : ComponentActivity() {
     }
 
     private val pages = mutableListOf<Page>()
+    private var rawUris = arrayListOf<String>()
     private var index = 0
     private var display: Bitmap? = null
     private lateinit var cropView: CropView
@@ -33,6 +34,8 @@ class CropActivity : ComponentActivity() {
         title = "Adjust the sheet"
         val uris = intent.getStringArrayListExtra("uris").orEmpty()
         if (uris.isEmpty()) { finish(); return }
+        rawUris = ArrayList(uris)
+        MedStore.saveLastScanUris(this, uris)
         uris.forEach { pages.add(Page(Uri.parse(it))) }
 
         val root = vertical().apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }
@@ -117,11 +120,12 @@ class CropActivity : ComponentActivity() {
                     return@runOnUiThread
                 }
                 val meds = MedParser.parse(text, slots)
-                if (meds.isEmpty()) toast("No medicines recognised automatically – please add them manually.")
+                if (meds.isEmpty()) toast("No medicines recognised automatically – you can rescan or add them manually.")
                 startActivity(
                     Intent(this, ReviewActivity::class.java)
                         .putExtra("meds", Med.listToJson(meds))
                         .putExtra("raw", text)
+                        .putStringArrayListExtra("uris", rawUris)
                 )
                 finish()
             }

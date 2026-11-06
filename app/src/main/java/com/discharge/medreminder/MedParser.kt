@@ -8,6 +8,8 @@ package com.discharge.medreminder
  *   "Cap Amoxicillin 500mg TDS for 7 days"
  *   "Syp Paracetamol 5 ml every 6 hours SOS"
  *   "Tab Methotrexate 7.5 mg once a week for 4 weeks"
+ *   "Tab Prednisolone 10 mg 1-1-1 x 3 days then 1-0-1 x 3 days"
+ *   "Tab Furosemide 40 mg ½-0-½ x 5 days" / "2-0-2 x 5 days"
  * It also repairs common OCR mistakes (I-O-I -> 1-0-1, "rng" -> "mg").
  * The result is ALWAYS shown to the user for checking before reminders are created.
  */
@@ -15,9 +17,11 @@ object MedParser {
     private val I = RegexOption.IGNORE_CASE
 
     private val FORM = Regex("""^\s*(?:[•*\-]\s*)?(?:\d{1,2}\s*(?:[.)]\s*|\s+))?(tab(?:let)?s?|cap(?:sule)?s?|syp|syrup|susp(?:ension)?|inj(?:ection)?|drops?|oint(?:ment)?|cream|gel|lotion|inhaler|inh|rotacaps?|respules?|neb|nebuli[sz]ation|sachet|powder|pwd|t(?=\.)|c(?=\.))\b\.?\s*""", I)
-    private val PATTERN = Regex("""(?<![\d.])([01]|½|1/2)\s*[-–—]\s*([01]|½|1/2)\s*[-–—]\s*([01]|½|1/2)(?:\s*[-–—]\s*([01]|½|1/2))?(?![\d./])""")
-    private val NOISY_PATTERN = Regex("""(?<![A-Za-z0-9])([01IlOo|½])\s*[-–—]\s*([01IlOo|½])\s*[-–—]\s*([01IlOo|½])(?:\s*[-–—]\s*([01IlOo|½]))?(?![A-Za-z0-9])""")
+    private val SLOT_VAL = """([0-4]|½|1/2|¼|1/4|¾|3/4)"""
+    private val PATTERN = Regex("""(?<![\d.])$SLOT_VAL\s*[-–—]\s*$SLOT_VAL\s*[-–—]\s*$SLOT_VAL(?:\s*[-–—]\s*$SLOT_VAL)?(?![\d./])""")
+    private val NOISY_PATTERN = Regex("""(?<![A-Za-z0-9])([0-4IlOo|½])\s*[-–—]\s*([0-4IlOo|½])\s*[-–—]\s*([0-4IlOo|½])(?:\s*[-–—]\s*([0-4IlOo|½]))?(?![A-Za-z0-9])""")
     private val HOURLY = Regex("""\b(?:every|q)\s*(\d{1,2})\s*(?:h|hr|hrs|hours?)\b""", I)
+    private val TAPER_SPLIT = Regex("""\s*(?:,?\s*\bthen\b|followed\s+by)\s+""", I)
 
     private enum class Freq { OD, BD, TDS, QID }
     private val FREQ = listOf(
@@ -60,7 +64,7 @@ object MedParser {
                 i++
             }
             i++
-            parseLine(line, hasForm, slots)?.let { out.add(it) }
+            out.addAll(parseLineWithTaper(line, hasForm, slots))
         }
         return out
     }
@@ -103,6 +107,17 @@ object MedParser {
         return null
     }
 
+    /** Returns a note like "Pattern 2-0-2" when non-zero slots are fractional or >1. */
+    private fun patternQuantityNote(s: String): String? {
+        val m = PATTERN.find(s) ?: return null
+        val parts = m.groupValues.drop(1).filter { it.isNotEmpty() }
+        val nonZero = parts.filter { it != "0" }
+        if (nonZero.isNotEmpty() && nonZero.any { it != "1" }) {
+            return "Pattern " + parts.joinToString("-")
+        }
+        return null
+    }
+
     private fun prettyForm(f: String): String {
         val l = f.lowercase()
         return when {
@@ -116,6 +131,26 @@ object MedParser {
             l.startsWith("drop") -> "Drops"
             else -> l.replaceFirstChar { it.uppercase() }
         }
+    }
+
+    private fun parseLineWithTaper(line: String, hasForm: Boolean, slots: Slots): List<Med> {
+        val parts = TAPER_SPLIT.split(line).map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.size <= 1) {
+            return listOfNotNull(parseLine(line, hasForm, slots))
+        }
+        val first = parseLine(parts[0], hasForm, slots) ?: return listOfNotNull(parseLine(line, hasForm, slots))
+        val results = mutableListOf(first)
+        var nextStart = first.startMillis + first.days * 86_400_000L
+        for (idx in 1 until parts.size) {
+            val stepText = "${first.name} ${first.dose} ${parts[idx]}".trim()
+            val stepMed = parseLine(stepText, true, slots) ?: continue
+            stepMed.startMillis = nextStart
+            val taperNote = "Taper step ${idx + 1}"
+            stepMed.note = listOf(taperNote, stepMed.note).filter { it.isNotBlank() }.joinToString("; ")
+            results.add(stepMed)
+            nextStart += stepMed.days * 86_400_000L
+        }
+        return results
     }
 
     private fun parseLine(line: String, hasForm: Boolean, slots: Slots): Med? {
@@ -140,6 +175,7 @@ object MedParser {
         val notes = mutableListOf<String>()
         if (BEFORE.containsMatchIn(line)) notes.add("Before food")
         else if (AFTER.containsMatchIn(line)) notes.add("After food")
+        patternQuantityNote(line)?.let { notes.add(it) }
 
         val every = when {
             WEEKLY.containsMatchIn(line) -> { notes.add("Weekly – check the correct day"); 7 }

@@ -1,25 +1,56 @@
 name: Build APK
 on:
   push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v3
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: "8.9"
-      - name: Build APK
-        run: gradle assembleDebug --no-daemon
-      - uses: actions/upload-artifact@v4
+
+      - name: Pre-download Tesseract OCR model
+        run: |
+          mkdir -p app/src/main/assets/tessdata
+          curl -L -f -o app/src/main/assets/tessdata/eng.traineddata https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/eng.traineddata
+
+      - name: Run sheet-reading unit tests
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Build APKs (per-ABI and universal)
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: DischargeMedReminder-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-      - name: Run sheet-reading tests
-        run: gradle testDebugUnitTest --no-daemon
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Publish GitHub Release on version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/*.apk
+          generate_release_notes: true

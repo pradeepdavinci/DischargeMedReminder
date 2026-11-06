@@ -2,6 +2,7 @@ package com.discharge.medreminder
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PointF
 import android.net.Uri
 import com.googlecode.tesseract.android.TessBaseAPI
@@ -16,6 +17,13 @@ import java.io.FileOutputStream
 object OcrPipeline {
     class PageSpec(val uri: Uri, val rotation: Int, val corners: Array<PointF>)
     private class Candidate(val text: String, val conf: Int, val meds: Int)
+
+    fun previewFile(ctx: Context): File = File(ctx.cacheDir, "last_scan_preview.jpg")
+
+    fun loadPreview(ctx: Context): Bitmap? {
+        val f = previewFile(ctx)
+        return if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+    }
 
     /** Copies the bundled model to private storage once (Tesseract needs a real file path). */
     private fun ensureModel(ctx: Context): String {
@@ -61,6 +69,13 @@ object OcrPipeline {
                 val rot = ImageTools.rotate(full, p.rotation)
                 val warped = ImageTools.warp(rot, p.corners.map { PointF(it.x * rot.width, it.y * rot.height) })
                 rot.recycle()
+                if (i == 0) {
+                    try {
+                        FileOutputStream(previewFile(ctx)).use { s ->
+                            warped.compress(Bitmap.CompressFormat.JPEG, 85, s)
+                        }
+                    } catch (_: Exception) {}
+                }
                 val clean = ImageTools.binarize(warped)
 
                 progress("${tag}reading text (pass 1 of 2)…")

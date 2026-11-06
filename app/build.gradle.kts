@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -10,10 +12,18 @@ android {
         applicationId = "com.discharge.medreminder"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0-foss"
+        versionCode = 3
+        versionName = "2.1-foss"
     }
     buildTypes { release { isMinifyEnabled = false } }
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -43,8 +53,10 @@ val downloadTessModel = tasks.register("downloadTessModel") {
     doLast {
         tessModel.parentFile.mkdirs()
         val tmp = File(tessModel.path + ".part")
-        java.net.URI("https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata")
-            .toURL().openStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+        val conn = URI("https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/eng.traineddata")
+            .toURL().openConnection()
+        conn.setRequestProperty("User-Agent", "DischargeMedReminder-Build")
+        conn.getInputStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
         if (!tmp.renameTo(tessModel)) throw GradleException("Could not save $tessModel")
     }
 }

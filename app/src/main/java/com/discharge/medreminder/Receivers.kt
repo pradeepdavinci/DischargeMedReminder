@@ -16,12 +16,13 @@ class AlarmReceiver : BroadcastReceiver() {
             Scheduler.ACTION_DOSE -> {
                 val repeat = intent.getBooleanExtra("snooze", false)
                 if (!repeat) Scheduler.scheduleSlot(ctx, m, idx, System.currentTimeMillis() + 60_000L)
-                if (Doses.isTaken(ctx, m, idx, due)) return
+                if (Doses.isTaken(ctx, m, idx, due) || Doses.isSkipped(ctx, m, idx, due)) return
                 Notifier.showDose(ctx, m, idx, due, repeat)
                 val followUp = Prefs.followUp(ctx)
                 if (!repeat && followUp > 0) Scheduler.snooze(ctx, m, idx, followUp, due)
             }
             Notifier.ACTION_TAKEN -> Doses.markTaken(ctx, m, idx, due)
+            Notifier.ACTION_SKIP -> Doses.markSkipped(ctx, m, idx, due, "Skipped from notification")
             Notifier.ACTION_SNOOZE -> {
                 NotificationManagerCompat.from(ctx).cancel(Notifier.notifId(medId, idx))
                 Scheduler.snooze(ctx, m, idx, 10, due)

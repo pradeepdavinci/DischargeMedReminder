@@ -92,4 +92,29 @@ class MedParserTest {
         assertEquals("Tab Shelcal 500", r[1].name)
         assertEquals(30, r[1].days)
     }
+
+    @Test fun multiTabletAndFractionalPattern() {
+        val m1 = one("Tab Furosemide 40 mg 2-0-1 after food x 5 days")
+        assertEquals("Tab Furosemide", m1.name)
+        assertEquals(listOf("08:00", "21:00"), m1.times)
+        assertTrue(m1.note.contains("Pattern 2-0-1"))
+
+        val m2 = one("Tab Ramipril 5 mg ½-0-½ x 10 days")
+        assertEquals("Tab Ramipril", m2.name)
+        assertEquals(listOf("08:00", "21:00"), m2.times)
+        assertTrue(m2.note.contains("Pattern ½-0-½"))
+    }
+
+    @Test fun taperingScheduleCreatesSequentialSteps() {
+        val r = MedParser.parse("Tab Prednisolone 10 mg 1-1-1 x 3 days then 1-0-1 x 4 days")
+        assertEquals(2, r.size)
+        assertEquals("Tab Prednisolone", r[0].name)
+        assertEquals(listOf("08:00", "14:00", "21:00"), r[0].times)
+        assertEquals(3, r[0].days)
+        assertEquals("Tab Prednisolone", r[1].name)
+        assertEquals(listOf("08:00", "21:00"), r[1].times)
+        assertEquals(4, r[1].days)
+        assertTrue(r[1].note.contains("Taper step 2"))
+        assertEquals(r[0].startMillis + 3 * 86_400_000L, r[1].startMillis)
+    }
 }

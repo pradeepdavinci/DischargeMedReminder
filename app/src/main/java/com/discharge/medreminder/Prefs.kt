@@ -40,4 +40,8 @@ object Prefs {
     /** Minutes after a dose to remind again if it was not marked as taken (0 = off). */
     fun followUp(ctx: Context): Int = p(ctx).getInt("followUp", 15)
     fun setFollowUp(ctx: Context, minutes: Int) { p(ctx).edit().putInt("followUp", minutes).commit() }
+
+    /** Accessibility option for larger text across the app. */
+    fun largeText(ctx: Context): Boolean = p(ctx).getBoolean("largeText", false)
+    fun setLargeText(ctx: Context, enabled: Boolean) { p(ctx).edit().putBoolean("largeText", enabled).commit() }
 }

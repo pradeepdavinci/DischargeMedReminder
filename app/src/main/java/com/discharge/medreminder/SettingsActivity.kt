@@ -1,6 +1,7 @@
 package com.discharge.medreminder
 
 import android.os.Bundle
+import android.widget.EditText
 import android.widget.ScrollView
 import androidx.activity.ComponentActivity
 
@@ -14,18 +15,36 @@ class SettingsActivity : ComponentActivity() {
         root.addView(label("Usual dose times", 19f, true))
         root.addView(label("Used when reading new sheets: OD = morning, BD = morning + night, " +
             "TDS = morning + afternoon + night, QID = all four, 1-0-1 = morning + night. " +
-            "Medicines already saved keep their own times (use Edit to change them).", 13f))
+            "Tap Pick to use the clock or type HH:MM.", 13f))
         val morning = field("Morning", s.morning)
         val afternoon = field("Afternoon", s.afternoon)
         val evening = field("Evening", s.evening)
         val night = field("Night", s.night)
-        listOf("Morning" to morning, "Afternoon" to afternoon, "Evening" to evening, "Night / bedtime" to night).forEach {
-            root.addView(label(it.first, 13f, true)); root.addView(it.second)
+
+        fun slotRow(titleText: String, edit: EditText) {
+            root.addView(label(titleText, 13f, true))
+            val r = horizontal()
+            r.addView(edit, weighted())
+            r.addView(button("🕒 Pick") {
+                pickTime(edit.text.toString()) { picked -> edit.setText(picked) }
+            })
+            root.addView(r)
         }
+
+        slotRow("Morning", morning)
+        slotRow("Afternoon", afternoon)
+        slotRow("Evening", evening)
+        slotRow("Night / bedtime", night)
+
         root.addView(label("Repeat reminder", 19f, true))
         root.addView(label("If a dose is not marked as taken, remind again after this many minutes (0 = off).", 13f))
         val follow = field("Minutes", Prefs.followUp(this).toString(), numeric = true)
         root.addView(follow)
+
+        root.addView(label("Accessibility", 19f, true))
+        val largeTextCheck = checkBox("Use larger text across the app", Prefs.largeText(this))
+        root.addView(largeTextCheck)
+
         root.addView(button("Save") {
             val vals = listOf(morning, afternoon, evening, night).map { normalizeTime(it.text.toString()) }
             val f = follow.text.toString().toIntOrNull()
@@ -35,6 +54,7 @@ class SettingsActivity : ComponentActivity() {
                 else -> {
                     Prefs.saveSlots(this, Slots(vals[0]!!, vals[1]!!, vals[2]!!, vals[3]!!))
                     Prefs.setFollowUp(this, f)
+                    Prefs.setLargeText(this, largeTextCheck.isChecked)
                     toast("Settings saved")
                     finish()
                 }

@@ -8,15 +8,46 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PointF
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Open-source image clean-up: loading, page detection, perspective correction, shadow removal. */
+/** Open-source image clean-up: loading, PDF rendering, page detection, perspective correction, shadow removal. */
 object ImageTools {
+
+    /** Renders up to [maxPages] pages of a PDF discharge summary into cached JPEG URIs for offline OCR. */
+    fun renderPdfToCache(ctx: Context, pdfUri: Uri, maxPages: Int = 5): List<Uri> {
+        val out = mutableListOf<Uri>()
+        val dir = File(ctx.cacheDir, "photos").apply { mkdirs() }
+        val pfd = ctx.contentResolver.openFileDescriptor(pdfUri, "r") ?: return emptyList()
+        pfd.use { descriptor ->
+            PdfRenderer(descriptor).use { renderer ->
+                val count = minOf(renderer.pageCount, maxPages)
+                for (i in 0 until count) {
+                    renderer.openPage(i).use { page ->
+                        val scale = 2200f / max(1, max(page.width, page.height))
+                        val w = max(1, (page.width * scale).roundToInt())
+                        val h = max(1, (page.height * scale).roundToInt())
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        Canvas(bmp).drawColor(Color.WHITE)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                        val f = File(dir, "pdf_page_${System.currentTimeMillis()}_$i.jpg")
+                        FileOutputStream(f).use { stream -> bmp.compress(Bitmap.CompressFormat.JPEG, 92, stream) }
+                        bmp.recycle()
+                        out.add(FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f))
+                    }
+                }
+            }
+        }
+        return out
+    }
 
     /** Loads a photo no larger than [maxDim] on its long side, upright according to its EXIF data. */
     fun load(ctx: Context, uri: Uri, maxDim: Int): Bitmap? {

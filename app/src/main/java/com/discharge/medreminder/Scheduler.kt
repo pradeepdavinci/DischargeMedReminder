@@ -115,11 +115,37 @@ object Doses {
 
     fun isTaken(ctx: Context, m: Med, idx: Int, due: Long) = MedStore.isTaken(ctx, m.id, dayKey(due), idx)
 
+    fun isSkipped(ctx: Context, m: Med, idx: Int, due: Long) = MedStore.isSkipped(ctx, m.id, dayKey(due), idx)
+
+    fun skipReason(ctx: Context, m: Med, idx: Int, due: Long) = MedStore.skipReason(ctx, m.id, dayKey(due), idx)
+
     fun markTaken(ctx: Context, m: Med, idx: Int, due: Long) {
         MedStore.setTaken(ctx, m.id, dayKey(due), idx)
         NotificationManagerCompat.from(ctx).cancel(Notifier.notifId(m.id, idx))
         Scheduler.cancelSnooze(ctx, m, idx)
         val now = SimpleDateFormat("d MMM, h:mm a", Locale.getDefault()).format(Date())
-        MedStore.addLog(ctx, "$now — ${m.name} (${m.times.getOrElse(idx) { "" }} dose) taken")
+        val slot = m.times.getOrNull(idx) ?: ""
+        MedStore.addLog(ctx, "$now — ${m.name} ($slot dose) taken ✓")
+    }
+
+    fun unmarkTaken(ctx: Context, m: Med, idx: Int, due: Long) {
+        MedStore.unsetTaken(ctx, m.id, dayKey(due), idx)
+        val now = SimpleDateFormat("d MMM, h:mm a", Locale.getDefault()).format(Date())
+        val slot = m.times.getOrNull(idx) ?: ""
+        MedStore.addLog(ctx, "$now — ${m.name} ($slot dose) unmarked (undo)")
+    }
+
+    fun markSkipped(ctx: Context, m: Med, idx: Int, due: Long, reason: String) {
+        val cleanReason = reason.trim().ifBlank { "Skipped" }
+        MedStore.setSkipped(ctx, m.id, dayKey(due), idx, cleanReason)
+        NotificationManagerCompat.from(ctx).cancel(Notifier.notifId(m.id, idx))
+        Scheduler.cancelSnooze(ctx, m, idx)
+        val now = SimpleDateFormat("d MMM, h:mm a", Locale.getDefault()).format(Date())
+        val slot = m.times.getOrNull(idx) ?: ""
+        MedStore.addLog(ctx, "$now — ${m.name} ($slot dose) skipped ($cleanReason)")
+    }
+
+    fun unmarkSkipped(ctx: Context, m: Med, idx: Int, due: Long) {
+        MedStore.unsetSkipped(ctx, m.id, dayKey(due), idx)
     }
 }
