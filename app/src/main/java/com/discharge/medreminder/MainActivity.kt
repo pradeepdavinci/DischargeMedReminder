@@ -453,7 +453,7 @@ class MainActivity : ComponentActivity() {
             if (y > 760f) break
             val line1 = "• ${m.name} ${m.dose}".trim() + " — " +
                 (if (m.times.isEmpty()) "As needed (SOS)" else m.times.joinToString(", ") + everyText(m))
-            val line2 = "   Course: ${m.days} days (${dfmt.format(Date(m.startMillis))} – ${dfmt.format(Date(Scheduler.endMillis(m) - 1)))}" +
+            val line2 = "   Course: ${m.days} days (${dfmt.format(Date(m.startMillis))} – ${dfmt.format(Date(Scheduler.endMillis(m) - 1))})" +
                 if (m.note.isNotBlank()) " · ${m.note}" else ""
             canvas.drawText(line1.take(95), 36f, y, bodyPaint); y += 14f
             canvas.drawText(line2.take(100), 36f, y, bodyPaint); y += 16f
