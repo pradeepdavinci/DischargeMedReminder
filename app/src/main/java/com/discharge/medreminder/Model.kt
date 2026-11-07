@@ -133,6 +133,19 @@ object MedStore {
     fun isSkipped(ctx: Context, medId: Int, day: String, idx: Int): Boolean =
         skipReason(ctx, medId, day, idx) != null
 
+    /** Doctor follow-up appointment date (local midnight millis; 0L = none set). */
+    fun followUpDate(ctx: Context): Long = p(ctx).getLong("followUpDate", 0L)
+
+    fun followUpNote(ctx: Context): String =
+        p(ctx).getString("followUpNote", null) ?: "Hospital OPD follow-up checkup"
+
+    fun saveFollowUpDate(ctx: Context, millis: Long, note: String = "Hospital OPD follow-up checkup") {
+        p(ctx).edit()
+            .putLong("followUpDate", millis)
+            .putString("followUpNote", note.trim().ifBlank { "Hospital OPD follow-up checkup" })
+            .commit()
+    }
+
     /** Remembers the last scanned page URIs so the user can rescan or re-crop with one tap. */
     fun saveLastScanUris(ctx: Context, uris: List<String>) {
         val arr = JSONArray().apply { uris.forEach { put(it) } }
@@ -147,17 +160,20 @@ object MedStore {
         } catch (e: Exception) { emptyList() }
     }
 
-    /** Exports all medicines, settings, and logs as a single portable JSON string. */
+    /** Exports all medicines, settings, follow-up date, and logs as a single portable JSON string. */
     fun exportBackupJson(ctx: Context): String {
         val s = Prefs.slots(ctx)
         return JSONObject().apply {
-            put("version", 2)
+            put("version", 3)
             put("meds", JSONArray(Med.listToJson(load(ctx))))
             put("slots", JSONObject().apply {
                 put("morning", s.morning); put("afternoon", s.afternoon)
                 put("evening", s.evening); put("night", s.night)
+                put("beforeFoodOffset", s.beforeFoodOffset)
             })
             put("followUp", Prefs.followUp(ctx))
+            put("followUpDate", followUpDate(ctx))
+            put("followUpNote", followUpNote(ctx))
             put("logs", JSONArray(logs(ctx)))
         }.toString(2)
     }
@@ -171,11 +187,16 @@ object MedStore {
                 normalizeTime(so.optString("morning", d.morning)) ?: d.morning,
                 normalizeTime(so.optString("afternoon", d.afternoon)) ?: d.afternoon,
                 normalizeTime(so.optString("evening", d.evening)) ?: d.evening,
-                normalizeTime(so.optString("night", d.night)) ?: d.night
+                normalizeTime(so.optString("night", d.night)) ?: d.night,
+                so.optInt("beforeFoodOffset", 30).coerceIn(0, 120)
             ))
         }
         if (root.has("followUp")) {
             Prefs.setFollowUp(ctx, root.optInt("followUp", 15).coerceIn(0, 240))
+        }
+        if (root.has("followUpDate")) {
+            saveFollowUpDate(ctx, root.optLong("followUpDate", 0L), root.optString("followUpNote", "Hospital OPD follow-up checkup"))
+            Scheduler.scheduleFollowUpVisit(ctx)
         }
         val arr = root.optJSONArray("meds") ?: JSONArray()
         val imported = MutableList(arr.length()) { Med.fromJson(arr.getJSONObject(it)) }

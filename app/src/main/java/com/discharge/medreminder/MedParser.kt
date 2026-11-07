@@ -9,19 +9,27 @@ package com.discharge.medreminder
  *   "Syp Paracetamol 5 ml every 6 hours SOS"
  *   "Tab Methotrexate 7.5 mg once a week for 4 weeks"
  *   "Tab Prednisolone 10 mg 1-1-1 x 3 days then 1-0-1 x 3 days"
- *   "Tab Furosemide 40 mg ½-0-½ x 5 days" / "2-0-2 x 5 days"
- * It also repairs common OCR mistakes (I-O-I -> 1-0-1, "rng" -> "mg").
+ *   "ALIVATE SP TAB (aceciorenac 1-0-1 after food"
+ *   "Inj H MIXTARD INSULIN 30/70 12" / "Inj Human Mixtard 30/70 12-0-8"
+ * It also repairs common OCR mistakes (I-O-I -> 1-0-1, "rng" -> "mg", "FQRTE" -> "FORTE").
  * The result is ALWAYS shown to the user for checking before reminders are created.
  */
 object MedParser {
     private val I = RegexOption.IGNORE_CASE
 
     private val FORM = Regex("""^\s*(?:[•*\-]\s*)?(?:\d{1,2}\s*(?:[.)]\s*|\s+))?(tab(?:let)?s?|cap(?:sule)?s?|syp|syrup|susp(?:ension)?|inj(?:ection)?|drops?|oint(?:ment)?|cream|gel|lotion|inhaler|inh|rotacaps?|respules?|neb|nebuli[sz]ation|sachet|powder|pwd|t(?=\.)|c(?=\.))\b\.?\s*""", I)
+    private val TRAILING_FORM = Regex("""\b(tab(?:let)?s?|cap(?:sule)?s?|syp|syrup|susp(?:ension)?|inj(?:ection)?)\b\.?$""", I)
+    private val PAREN_SALT = Regex("""\(\s*([A-Za-z][A-Za-z0-9\s,+\-/]{2,})\s*\)?$""")
     private val SLOT_VAL = """([0-4]|½|1/2|¼|1/4|¾|3/4)"""
     private val PATTERN = Regex("""(?<![\d.])$SLOT_VAL\s*[-–—]\s*$SLOT_VAL\s*[-–—]\s*$SLOT_VAL(?:\s*[-–—]\s*$SLOT_VAL)?(?![\d./])""")
+    private val INSULIN_PATTERN = Regex("""(?<![\d./-])(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})(?![\d./-])""")
+    private val DATE_CONTEXT = Regex("""\b(date|dob|discharge|admitted|admission|follow\s*up|review)\b""", I)
+    private val INSULIN_CONTEXT = Regex("""\b(inj(?:ection)?|insulin|mixtard|actrapid|novorapid|humalog|lantus|basalog|tresiba|units?|iu)\b""", I)
+    private val TRAILING_INSULIN_UNITS = Regex("""\b(\d{2}/\d{2})\s+(\d{1,2})\b""")
     private val NOISY_PATTERN = Regex("""(?<![A-Za-z0-9])([0-4IlOo|½])\s*[-–—]\s*([0-4IlOo|½])\s*[-–—]\s*([0-4IlOo|½])(?:\s*[-–—]\s*([0-4IlOo|½]))?(?![A-Za-z0-9])""")
     private val HOURLY = Regex("""\b(?:every|q)\s*(\d{1,2})\s*(?:h|hr|hrs|hours?)\b""", I)
     private val TAPER_SPLIT = Regex("""\s*(?:,?\s*\bthen\b|followed\s+by)\s+""", I)
+    private val FOLLOW_UP = Regex("""\b(?:follow[\s\-]*up|review)\b[^\n\d]{0,25}(\d{1,3})\s*(days?|weeks?|wks?|months?)\b""", I)
 
     private enum class Freq { OD, BD, TDS, QID }
     private val FREQ = listOf(
@@ -44,9 +52,10 @@ object MedParser {
     private val ONGOING = Regex("""\b(continue|long ?term|lifelong|life long|till further|until further|indefinite)""", I)
     private val DUR1 = Regex("""(?:for|x|×|\*)\s*(\d{1,3})\s*(days?|d|weeks?|wks?|w|months?|mon)\b""", I)
     private val DUR2 = Regex("""\b(\d{1,3})\s*(days?|weeks?|wks?|months?)\b""", I)
-    private val DOSE = Regex("""\b\d+(?:\.\d+)?\s*(?:mg|mcg|µg|gm|g|ml|iu|units?|%)(?![a-z])""", I)
-    private val BEFORE = Regex("""\b(before food|before meals?|before breakfast|empty stomach|ac)\b""", I)
-    private val AFTER = Regex("""\b(after food|after meals?|after breakfast|with food|pc)\b""", I)
+    private val DOSE = Regex("""\b\d+(?:\.\d+)?\s*(?:mg|mcg|µg|gm|g|ml|iu|units?|u\b|%)(?![a-z])""", I)
+    private val BEFORE = Regex("""\b(before food|before meals?|before breakfast|empty stomach|ac|pre[\s\-]*meal)\b""", I)
+    private val AFTER = Regex("""\b(after food|after meals?|after breakfast|with food|pc|post[\s\-]*meal)\b""", I)
+    private val AUTO_BEFORE_FOOD = Regex("""\b(pantoprazole|pan\s*40|pan\s*d|rabeprazole|omeprazole|esomeprazole|lansoprazole|thyronorm|levothyroxine|eltroxin|mixtard|actrapid|novorapid|humalog)\b""", I)
 
     fun parse(raw: String, slots: Slots = Slots()): List<Med> {
         val lines = raw.lines().map { normalize(it) }.filter { it.isNotBlank() }
@@ -54,7 +63,7 @@ object MedParser {
         var i = 0
         while (i < lines.size) {
             var line = lines[i]
-            val hasForm = FORM.containsMatchIn(line)
+            val hasForm = FORM.containsMatchIn(line) || INSULIN_CONTEXT.containsMatchIn(line)
             // Medicine name on one line and its instructions on the next: join them.
             if (hasForm && times(line, slots) == null && !PRN.containsMatchIn(line) && i + 1 < lines.size &&
                 !FORM.containsMatchIn(lines[i + 1]) &&
@@ -69,6 +78,19 @@ object MedParser {
         return out
     }
 
+    /** Detects "Follow up after 7 days" or "Review after 1 week" from the discharge sheet text. */
+    fun parseFollowUpDays(raw: String): Int? {
+        val m = FOLLOW_UP.find(raw) ?: return null
+        val n = m.groupValues[1].toIntOrNull() ?: return null
+        val u = m.groupValues[2].lowercase()
+        val days = when {
+            u.startsWith("w") -> n * 7
+            u.startsWith("m") -> n * 30
+            else -> n
+        }
+        return days.coerceIn(1, 180)
+    }
+
     internal fun normalize(s: String): String {
         var t = NOISY_PATTERN.replace(s) { m ->
             m.groupValues.drop(1).filter { it.isNotEmpty() }.joinToString("-") {
@@ -76,6 +98,8 @@ object MedParser {
             }
         }
         t = t.replace(Regex("""(\d)\s*(rng|m9|mq)\b""", I), "\$1 mg")
+        t = t.replace(Regex("""\bFQRTE\b""", I), "FORTE")
+        t = t.replace(Regex("""\baceciorenac\b""", I), "aceclofenac")
         t = t.replace(Regex("""(?i)\b([a-z])\.(?=[a-z])"""), "\$1")   // b.i.d -> bid, t.d.s -> tds
         return t.replace('|', ' ').replace(Regex("""\s{3,}"""), "   ").trim()
     }
@@ -87,6 +111,13 @@ object MedParser {
         Freq.QID -> listOf(s.morning, s.afternoon, s.evening, s.night)
     }
 
+    private fun isInsulinUnitPattern(s: String, m: MatchResult): Boolean {
+        if (DATE_CONTEXT.containsMatchIn(s)) return false
+        val nums = m.groupValues.drop(1).mapNotNull { it.toIntOrNull() }
+        if (nums.size != 3 || nums.any { it > 60 } || nums.all { it == 0 }) return false
+        return INSULIN_CONTEXT.containsMatchIn(s) || nums.contains(0)
+    }
+
     private fun times(s: String, slots: Slots): List<String>? {
         PATTERN.find(s)?.let { m ->
             val parts = m.groupValues.drop(1).filter { it.isNotEmpty() }
@@ -94,6 +125,14 @@ object MedParser {
                      else listOf(slots.morning, slots.afternoon, slots.night)
             val t = parts.indices.filter { parts[it] != "0" }.map { at[it] }
             if (t.isNotEmpty()) return t.distinct().sorted()
+        }
+        INSULIN_PATTERN.find(s)?.let { m ->
+            if (isInsulinUnitPattern(s, m)) {
+                val parts = m.groupValues.drop(1)
+                val at = listOf(slots.morning, slots.afternoon, slots.night)
+                val t = parts.indices.filter { parts[it] != "0" && parts[it] != "00" }.map { at[it] }
+                if (t.isNotEmpty()) return t.distinct().sorted()
+            }
         }
         HOURLY.find(s)?.let { m ->
             val n = m.groupValues[1].toInt()
@@ -107,13 +146,21 @@ object MedParser {
         return null
     }
 
-    /** Returns a note like "Pattern 2-0-2" when non-zero slots are fractional or >1. */
+    /** Returns a note like "Pattern 2-0-2" or "Units: 12-0-8" when non-zero slots are fractional or >1. */
     private fun patternQuantityNote(s: String): String? {
-        val m = PATTERN.find(s) ?: return null
-        val parts = m.groupValues.drop(1).filter { it.isNotEmpty() }
-        val nonZero = parts.filter { it != "0" }
-        if (nonZero.isNotEmpty() && nonZero.any { it != "1" }) {
-            return "Pattern " + parts.joinToString("-")
+        PATTERN.find(s)?.let { m ->
+            val parts = m.groupValues.drop(1).filter { it.isNotEmpty() }
+            val nonZero = parts.filter { it != "0" }
+            if (nonZero.isNotEmpty() && nonZero.any { it != "1" }) {
+                return "Pattern " + parts.joinToString("-")
+            }
+            return null
+        }
+        INSULIN_PATTERN.find(s)?.let { m ->
+            if (isInsulinUnitPattern(s, m)) {
+                val parts = m.groupValues.drop(1)
+                return "Units: " + parts.joinToString("-")
+            }
         }
         return null
     }
@@ -154,26 +201,68 @@ object MedParser {
     }
 
     private fun parseLine(line: String, hasForm: Boolean, slots: Slots): Med? {
+        if (DATE_CONTEXT.containsMatchIn(line) && !FORM.containsMatchIn(line)) return null
         val t = times(line, slots)
         val prn = PRN.containsMatchIn(line)
-        val dose = DOSE.find(line)?.value?.trim() ?: ""
+        var dose = DOSE.find(line)?.value?.trim() ?: ""
+        if (dose.lowercase().endsWith(" u")) {
+            dose = dose.dropLast(2).trim() + " units"
+        }
         if (!hasForm && t == null) return null
         if (!hasForm && dose.isEmpty() && !PATTERN.containsMatchIn(line)) return null
 
         val formMatch = FORM.find(line)
         val rawForm = formMatch?.groupValues?.get(1) ?: ""
         if (rawForm.length == 1 && t == null && dose.isEmpty() && !prn) return null   // "T." / "C." need more evidence
-        val form = if (rawForm.isNotEmpty()) prettyForm(rawForm) else ""
+        var form = if (rawForm.isNotEmpty()) prettyForm(rawForm) else ""
         val rest = if (formMatch != null) line.substring(formMatch.range.last + 1)
                    else line.replace(Regex("""^\s*\d{1,2}\s*(?:[.)]\s*|\s+)"""), "")
+
+        val insulinPatMatch = INSULIN_PATTERN.find(rest)?.takeIf { isInsulinUnitPattern(line, it) }
         val cutters = listOf(DOSE, PATTERN, HOURLY, PRN, DUR1, DUR2, DAILY, WEEKLY, ALTERNATE, BEFORE, AFTER) +
             FREQ.map { it.first } + SLOT_WORDS.map { it.first }
-        val cut = cutters.mapNotNull { it.find(rest)?.range?.first }.minOrNull() ?: rest.length
-        val name = rest.substring(0, cut).trim().trim('-', ':', ',', '.', '(', ')', '/').trim()
-        if (name.count { it.isLetter() } < 3) return null
+        var cut = cutters.mapNotNull { it.find(rest)?.range?.first }.minOrNull() ?: rest.length
+        if (insulinPatMatch != null && insulinPatMatch.range.first < cut) {
+            cut = insulinPatMatch.range.first
+        }
 
+        var rawName = rest.substring(0, cut).trim().trim('-', ':', ',', '.', '/').trim()
         val notes = mutableListOf<String>()
-        if (BEFORE.containsMatchIn(line)) notes.add("Before food")
+
+        // Extract parenthetical or unclosed generic salt name, e.g. "ALIVATE SP TAB (aceclofenac"
+        PAREN_SALT.find(rawName)?.let { pm ->
+            val salt = pm.groupValues[1].trim().trimEnd(')', ',', ';', '-')
+            if (salt.length >= 3) {
+                notes.add("Composition: $salt")
+            }
+            rawName = rawName.substring(0, pm.range.first).trim()
+        }
+        rawName = rawName.trim('(', ')').trim()
+
+        // Strip trailing form word, e.g. "ALIVATE SP TAB" -> form="Tab", name="ALIVATE SP"
+        TRAILING_FORM.find(rawName)?.let { tf ->
+            if (form.isEmpty()) form = prettyForm(tf.groupValues[1])
+            rawName = rawName.substring(0, tf.range.first).trim()
+        }
+
+        // Recognize trailing insulin units after mix ratio, e.g. "Inj H MIXTARD INSULIN 30/70 12"
+        if (INSULIN_CONTEXT.containsMatchIn(line)) {
+            TRAILING_INSULIN_UNITS.find(rawName)?.let { tm ->
+                if (dose.isEmpty()) {
+                    dose = "${tm.groupValues[2]} units"
+                }
+                rawName = (rawName.substring(0, tm.range.first) + tm.groupValues[1]).trim()
+            }
+            if (dose.isEmpty() && insulinPatMatch != null) {
+                dose = "${insulinPatMatch.value.replace(" ", "")} units"
+            }
+        }
+
+        if (rawName.count { it.isLetter() } < 3) return null
+
+        val isBeforeFood = BEFORE.containsMatchIn(line) ||
+            (!AFTER.containsMatchIn(line) && AUTO_BEFORE_FOOD.containsMatchIn(line))
+        if (isBeforeFood) notes.add("Before food")
         else if (AFTER.containsMatchIn(line)) notes.add("After food")
         patternQuantityNote(line)?.let { notes.add(it) }
 
@@ -194,12 +283,17 @@ object MedParser {
             ONGOING.containsMatchIn(line) -> { notes.add("Ongoing – confirm duration with doctor"); 30 }
             else -> { notes.add("Duration not found – please check"); 7 }
         }
-        val finalTimes = when {
+        val baseTimes = when {
             prn -> { notes.add("As needed – no automatic reminders"); emptyList() }
             t != null -> t
             else -> { notes.add("Timing not found – please set times"); listOf(slots.morning) }
         }
-        return Med(0, "$form $name".trim(), dose, finalTimes.toMutableList(), days, todayMidnight(),
+        val finalTimes = if (isBeforeFood && slots.beforeFoodOffset > 0 && !HOURLY.containsMatchIn(line)) {
+            baseTimes.map { shiftMinutes(it, -slots.beforeFoodOffset) }
+        } else {
+            baseTimes
+        }
+        return Med(0, "$form $rawName".trim(), dose, finalTimes.toMutableList(), days, todayMidnight(),
             notes.joinToString("; "), every)
     }
 }

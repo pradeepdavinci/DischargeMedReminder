@@ -3,6 +3,7 @@ package com.discharge.medreminder
 import android.Manifest
 import android.app.AlarmManager
 import android.app.AlertDialog
+import android.app.DatePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -24,6 +25,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -32,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var warnBox: LinearLayout
     private lateinit var rescanBox: LinearLayout
     private lateinit var todayBox: LinearLayout
+    private lateinit var followUpBox: LinearLayout
     private lateinit var listBox: LinearLayout
 
     private val captured = arrayListOf<String>()
@@ -96,6 +99,7 @@ class MainActivity : ComponentActivity() {
         root.addView(button("✍  Add a medicine manually") { startActivity(Intent(this, ReviewActivity::class.java)) })
         warnBox = vertical(); root.addView(warnBox)
         todayBox = vertical(); root.addView(todayBox)
+        followUpBox = vertical(); root.addView(followUpBox)
         listBox = vertical(); root.addView(listBox)
 
         val tools = horizontal()
@@ -191,6 +195,55 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun speakTodaySchedule(doses: List<Triple<String, Med, Int>>, today: Long) {
+        val pending = doses.filter { (_, m, i) ->
+            val due = Scheduler.dueOn(m, i, today)
+            !Doses.isTaken(this, m, i, due) && !Doses.isSkipped(this, m, i, due)
+        }
+        if (pending.isEmpty()) {
+            SpeechHelper.speak(this, "All scheduled medicines for today have been taken.", force = true)
+            toast("Speaking schedule…")
+            return
+        }
+        val speech = buildString {
+            append("You have ${pending.size} remaining dose")
+            if (pending.size > 1) append("s")
+            append(" today. ")
+            pending.forEach { (time, m, _) ->
+                val rel = if (Scheduler.isBeforeFoodMed(m)) "before food" else "after food"
+                append("At $time, $rel: ${m.name} ${m.dose}. ")
+            }
+        }
+        SpeechHelper.speak(this, speech, force = true)
+        toast("Speaking today's remaining doses…")
+    }
+
+    private fun shiftBeforeFoodMedsEarlier() {
+        val slots = Prefs.slots(this)
+        val offset = slots.beforeFoodOffset.coerceAtLeast(15)
+        val standardSlots = setOf(slots.morning, slots.afternoon, slots.evening, slots.night)
+        val all = MedStore.load(this)
+        var changed = 0
+        for (m in all) {
+            if (Scheduler.isBeforeFoodMed(m) && m.times.any { it in standardSlots }) {
+                Scheduler.cancelMed(this, m)
+                m.times = m.times.map { t ->
+                    if (t in standardSlots) shiftMinutes(t, -offset) else t
+                }.distinct().sorted().toMutableList()
+                if (!m.note.contains("Before food", ignoreCase = true)) {
+                    m.note = listOf("Before food", m.note).filter { it.isNotBlank() }.joinToString("; ")
+                }
+                Scheduler.scheduleMed(this, m)
+                changed++
+            }
+        }
+        if (changed > 0) {
+            MedStore.save(this, all)
+            toast("Shifted $changed before-food medicine(s) $offset min earlier")
+            refresh()
+        }
+    }
+
     private fun refresh() {
         rescanBox.removeAllViews()
         val lastUris = MedStore.lastScanUris(this)
@@ -219,81 +272,170 @@ class MainActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         val today = todayMidnight()
 
-        // Today's doses with clean 2-row layout so medicine names never wrap into a narrow column
+        // Today's doses grouped by meal routine (Before Breakfast, After Breakfast, Lunch, Dinner)
         todayBox.removeAllViews()
         val doses = meds.flatMap { m ->
             if (m.times.isEmpty() || !Scheduler.isDoseDay(m, today)) emptyList()
             else m.times.indices.map { i -> Triple(m.times[i], m, i) }
-        }.sortedBy { it.first }
+        }.sortedWith(compareBy({ Scheduler.mealGroup(it.second, it.first).first }, { it.first }))
+
         if (doses.isNotEmpty()) {
-            todayBox.addView(label("Today", 19f, true))
-            val c = card()
-            doses.forEachIndexed { doseIdx, (time, m, i) ->
-                if (doseIdx > 0) c.addView(divider())
-                val due = Scheduler.dueOn(m, i, today)
-                val taken = Doses.isTaken(this, m, i, due)
-                val skipReason = Doses.skipReason(this, m, i, due)
-                val skipped = skipReason != null
-                val itemBox = vertical().apply { setPadding(0, dp(4), 0, dp(4)) }
+            val todayHeader = horizontal()
+            todayHeader.addView(label("Today's Routine", 19f, true), weighted())
+            todayHeader.addView(button("🔊 Speak today") { speakTodaySchedule(doses, today) })
+            todayBox.addView(todayHeader)
 
-                // Row 1: Time/Status badge + full-width medicine name & dose
-                val topRow = horizontal()
-                val statusBadge = when {
-                    taken -> badge("✓ $time Taken", 0xFF16A34A.toInt())
-                    skipped -> badge("⏭ $time Skipped", 0xFF64748B.toInt())
-                    due < now -> badge("⚠ $time Overdue", 0xFFDC2626.toInt())
-                    else -> badge("🕒 $time", 0xFF2563EB.toInt())
-                }
-                topRow.addView(statusBadge)
-                val medTitle = listOf(m.name, m.dose).filter { it.isNotBlank() }.joinToString(" — ")
-                topRow.addView(
-                    label("  $medTitle", 16f, true).apply { setPadding(dp(8), dp(4), 0, dp(4)) },
-                    weighted()
-                )
-                itemBox.addView(topRow)
-
-                if (m.note.isNotBlank()) {
-                    itemBox.addView(label(m.note, 13f))
-                }
-                if (skipped && !skipReason.isNullOrBlank()) {
-                    itemBox.addView(label("Reason: $skipReason", 12f))
-                }
-
-                // Row 2: Action buttons on their own row with plenty of breathing room
-                val actionRow = horizontal()
-                when {
-                    taken -> {
-                        actionRow.addView(button("↩ Undo taken") { Doses.unmarkTaken(this, m, i, due); refresh() }, weighted())
-                    }
-                    skipped -> {
-                        actionRow.addView(button("↩ Undo skip") { Doses.unmarkSkipped(this, m, i, due); refresh() }, weighted())
-                    }
-                    else -> {
-                        actionRow.addView(button("✓ Mark taken") { Doses.markTaken(this, m, i, due); refresh() }, weighted())
-                        actionRow.addView(button("⏭ Skip") { promptSkipDose(m, i, due) }, weighted())
-                    }
-                }
-                itemBox.addView(actionRow)
-                c.addView(itemBox)
+            val slots = Prefs.slots(this)
+            val standardSlots = setOf(slots.morning, slots.afternoon, slots.evening, slots.night)
+            val hasUnshiftedBeforeFood = meds.any { m ->
+                Scheduler.isBeforeFoodMed(m) && m.times.any { it in standardSlots }
             }
-            todayBox.addView(c)
+            if (hasUnshiftedBeforeFood) {
+                val tipCard = card()
+                tipCard.addView(label("💡 Separate Empty-Stomach & After-Food times?", 14f, true))
+                tipCard.addView(label("Some empty-stomach or insulin medicines are set to the exact same time as your after-food medicines.", 13f))
+                tipCard.addView(button("🌅 Shift Before-Food medicines ${slots.beforeFoodOffset.coerceAtLeast(15)} min earlier") {
+                    shiftBeforeFoodMedsEarlier()
+                })
+                todayBox.addView(tipCard)
+            }
+
+            val grouped = doses.groupBy { Scheduler.mealGroup(it.second, it.first) }
+            for ((groupKey, groupDoses) in grouped) {
+                val groupTitle = groupKey.second
+                val c = card()
+                val groupHeader = horizontal()
+                groupHeader.addView(label(groupTitle, 16f, true), weighted())
+                c.addView(groupHeader)
+
+                val pendingInGroup = groupDoses.filter { (_, m, i) ->
+                    val due = Scheduler.dueOn(m, i, today)
+                    !Doses.isTaken(this, m, i, due) && !Doses.isSkipped(this, m, i, due)
+                }
+                if (pendingInGroup.size >= 2) {
+                    c.addView(button("✓ Mark all ${pendingInGroup.size} in this group taken") {
+                        pendingInGroup.forEach { (_, m, i) ->
+                            Doses.markTaken(this, m, i, Scheduler.dueOn(m, i, today))
+                        }
+                        refresh()
+                    })
+                }
+
+                groupDoses.forEachIndexed { doseIdx, (time, m, i) ->
+                    if (doseIdx > 0 || pendingInGroup.size >= 2) c.addView(divider())
+                    val due = Scheduler.dueOn(m, i, today)
+                    val taken = Doses.isTaken(this, m, i, due)
+                    val skipReason = Doses.skipReason(this, m, i, due)
+                    val skipped = skipReason != null
+                    val itemBox = vertical().apply { setPadding(0, dp(4), 0, dp(4)) }
+
+                    // Row 1: Time/Status badge + full-width medicine name & dose
+                    val topRow = horizontal()
+                    val statusBadge = when {
+                        taken -> badge("✓ $time Taken", 0xFF16A34A.toInt())
+                        skipped -> badge("⏭ $time Skipped", 0xFF64748B.toInt())
+                        due < now -> badge("⚠ $time Overdue", 0xFFDC2626.toInt())
+                        else -> badge("🕒 $time", 0xFF2563EB.toInt())
+                    }
+                    topRow.addView(statusBadge)
+                    val medTitle = listOf(m.name, m.dose).filter { it.isNotBlank() }.joinToString(" — ")
+                    topRow.addView(
+                        label("  $medTitle", 16f, true).apply { setPadding(dp(8), dp(4), 0, dp(4)) },
+                        weighted()
+                    )
+                    itemBox.addView(topRow)
+
+                    if (m.note.isNotBlank()) {
+                        itemBox.addView(label(m.note, 13f))
+                    }
+                    if (skipped && !skipReason.isNullOrBlank()) {
+                        itemBox.addView(label("Reason: $skipReason", 12f))
+                    }
+
+                    // Row 2: Action buttons on their own row
+                    val actionRow = horizontal()
+                    when {
+                        taken -> {
+                            actionRow.addView(button("↩ Undo taken") { Doses.unmarkTaken(this, m, i, due); refresh() }, weighted())
+                        }
+                        skipped -> {
+                            actionRow.addView(button("↩ Undo skip") { Doses.unmarkSkipped(this, m, i, due); refresh() }, weighted())
+                        }
+                        else -> {
+                            actionRow.addView(button("✓ Mark taken") { Doses.markTaken(this, m, i, due); refresh() }, weighted())
+                            actionRow.addView(button("⏭ Skip") { promptSkipDose(m, i, due) }, weighted())
+                        }
+                    }
+                    itemBox.addView(actionRow)
+                    c.addView(itemBox)
+                }
+                todayBox.addView(c)
+            }
         }
 
-        // All medicines
+        // Doctor follow-up checkup card
+        followUpBox.removeAllViews()
+        val dfmt = SimpleDateFormat("EEE d MMM yyyy", Locale.getDefault())
+        val fuDate = MedStore.followUpDate(this)
+        val fuCard = card()
+        val fuHeader = horizontal()
+        fuHeader.addView(label("🏥 Doctor Follow-Up Visit", 17f, true), weighted())
+        if (fuDate > 0L) {
+            val diffDays = ((fuDate - today + 43_200_000L) / 86_400_000L).toInt()
+            val statusText = when {
+                diffDays < 0 -> "${-diffDays}d ago"
+                diffDays == 0 -> "Today!"
+                else -> "In $diffDays day(s)"
+            }
+            val color = if (diffDays <= 1) 0xFFD97706.toInt() else 0xFF2563EB.toInt()
+            fuHeader.addView(badge(statusText, color))
+        }
+        fuCard.addView(fuHeader)
+        if (fuDate > 0L) {
+            fuCard.addView(label("Scheduled: ${dfmt.format(Date(fuDate))}", 15f, true))
+            fuCard.addView(label(MedStore.followUpNote(this), 13f))
+        } else {
+            fuCard.addView(label("No follow-up checkup date set yet.", 13f))
+        }
+        val fuBtns = horizontal()
+        fuBtns.addView(button(if (fuDate > 0L) "📅 Change date" else "📅 Set follow-up date") {
+            promptFollowUpDate(fuDate.takeIf { it > 0L } ?: (today + 7 * 86_400_000L))
+        }, weighted())
+        if (fuDate > 0L) {
+            fuBtns.addView(button("Clear") {
+                MedStore.saveFollowUpDate(this, 0L)
+                Scheduler.scheduleFollowUpVisit(this)
+                refresh()
+            })
+        }
+        fuCard.addView(fuBtns)
+        followUpBox.addView(fuCard)
+
+        // All medicines with "Day X of Y" progress badge
         listBox.removeAllViews()
         listBox.addView(label("Your medicines", 19f, true))
         if (meds.isEmpty()) listBox.addView(label("No medicines yet. Photograph or import the discharge sheet to get started.", 14f))
         val fmt = SimpleDateFormat("EEE d MMM, h:mm a", Locale.getDefault())
-        val dfmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+        val shortDateFmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
         for (m in meds) {
             val c = card()
             val header = horizontal()
             header.addView(label(listOf(m.name, m.dose).filter { it.isNotBlank() }.joinToString(" — "), 17f, true), weighted())
             if (m.loud) header.addView(badge("🔔 Loud alarm", 0xFFD97706.toInt()))
             c.addView(header)
+
+            val progressRow = horizontal()
+            val progressText = Scheduler.courseProgressText(m, today)
+            val progressColor = if (progressText.startsWith("✓")) 0xFF64748B.toInt() else 0xFF0284C7.toInt()
+            progressRow.addView(badge(progressText, progressColor))
+            if (Scheduler.isBeforeFoodMed(m)) {
+                progressRow.addView(label("  🌅 Empty stomach / Before food", 13f, true))
+            }
+            c.addView(progressRow)
+
             val timesJoined = m.times.joinToString(", ")
             c.addView(label(if (m.times.isEmpty()) "As needed (no reminders)" else "Times: $timesJoined" + everyText(m), 14f))
-            c.addView(label("Course: ${m.days} day(s), ${dfmt.format(Date(m.startMillis))} – ${dfmt.format(Date(Scheduler.endMillis(m) - 1))}", 14f))
+            c.addView(label("Course: ${m.days} day(s), ${shortDateFmt.format(Date(m.startMillis))} – ${shortDateFmt.format(Date(Scheduler.endMillis(m) - 1))}", 13f))
             if (m.note.isNotBlank()) c.addView(label(m.note, 13f))
             val next = Scheduler.nextDose(m)
             if (m.times.isNotEmpty())
@@ -313,6 +455,24 @@ class MainActivity : ComponentActivity() {
             listBox.addView(label("Recent adherence log", 17f, true))
             logs.take(15).forEach { listBox.addView(label(it, 13f)) }
         }
+    }
+
+    private fun promptFollowUpDate(initialMillis: Long) {
+        val cal = Calendar.getInstance().apply { timeInMillis = initialMillis }
+        DatePickerDialog(this, { _, y, mo, d ->
+            val picked = Calendar.getInstance().apply { clear(); set(y, mo, d) }.timeInMillis
+            val noteInput = field("Follow-up note (e.g. OPD review with blood sugar report)", MedStore.followUpNote(this))
+            AlertDialog.Builder(this)
+                .setTitle("Follow-up details")
+                .setView(noteInput)
+                .setPositiveButton("Save reminder") { _, _ ->
+                    MedStore.saveFollowUpDate(this, picked, noteInput.text.toString())
+                    Scheduler.scheduleFollowUpVisit(this)
+                    toast("Doctor follow-up reminder set")
+                    refresh()
+                }
+                .show()
+        }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
     }
 
     private fun promptSkipDose(m: Med, idx: Int, due: Long) {
@@ -395,6 +555,7 @@ class MainActivity : ComponentActivity() {
         val meds = MedStore.load(this)
         if (meds.isEmpty()) { toast("No medicines to share yet."); return }
         val dfmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+        val fuDate = MedStore.followUpDate(this)
         val text = buildString {
             append("Medication schedule\n\n")
             for (m in meds) {
@@ -402,6 +563,9 @@ class MainActivity : ComponentActivity() {
                 append("   ").append(if (m.times.isEmpty()) "As needed" else m.times.joinToString(", ") + everyText(m))
                 append(", ${dfmt.format(Date(m.startMillis))} to ${dfmt.format(Date(Scheduler.endMillis(m) - 1))}\n")
                 if (m.note.isNotBlank()) append("   ").append(m.note).append('\n')
+            }
+            if (fuDate > 0L) {
+                append("\nDoctor Follow-Up: ${dfmt.format(Date(fuDate))} (${MedStore.followUpNote(this)})\n")
             }
             append("\nShared from Discharge Med Reminder (free & open source). Always follow the printed discharge sheet.")
         }
@@ -469,6 +633,12 @@ class MainActivity : ComponentActivity() {
         y += 18f
         canvas.drawText("Generated on ${dfmt.format(Date())} · Always verify against printed hospital discharge sheet", 36f, y, bodyPaint)
         y += 24f
+
+        val fuDate = MedStore.followUpDate(this)
+        if (fuDate > 0L) {
+            canvas.drawText("Doctor Follow-Up: ${dfmt.format(Date(fuDate))} — ${MedStore.followUpNote(this)}", 36f, y, subPaint)
+            y += 20f
+        }
 
         canvas.drawText("Prescribed Medicines", 36f, y, subPaint)
         y += 16f

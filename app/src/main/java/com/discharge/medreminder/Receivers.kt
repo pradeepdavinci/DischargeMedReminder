@@ -7,6 +7,10 @@ import androidx.core.app.NotificationManagerCompat
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
+        if (intent.action == Scheduler.ACTION_FOLLOW_UP) {
+            Notifier.showFollowUpVisit(ctx, MedStore.followUpNote(ctx))
+            return
+        }
         val medId = intent.getIntExtra("medId", -1)
         val idx = intent.getIntExtra("idx", 0)
         val due = intent.getLongExtra("due", System.currentTimeMillis())
