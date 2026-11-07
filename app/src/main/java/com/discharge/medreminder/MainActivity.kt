@@ -556,6 +556,7 @@ class MainActivity : ComponentActivity() {
         if (meds.isEmpty()) { toast("No medicines to share yet."); return }
         val dfmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
         val fuDate = MedStore.followUpDate(this)
+        val fuNote = MedStore.followUpNote(this)
         val text = buildString {
             append("Medication schedule\n\n")
             for (m in meds) {
@@ -565,7 +566,7 @@ class MainActivity : ComponentActivity() {
                 if (m.note.isNotBlank()) append("   ").append(m.note).append('\n')
             }
             if (fuDate > 0L) {
-                append("\nDoctor Follow-Up: ${dfmt.format(Date(fuDate))} (${MedStore.followUpNote(this)})\n")
+                append("\nDoctor Follow-Up: ${dfmt.format(Date(fuDate))} ($fuNote)\n")
             }
             append("\nShared from Discharge Med Reminder (free & open source). Always follow the printed discharge sheet.")
         }
