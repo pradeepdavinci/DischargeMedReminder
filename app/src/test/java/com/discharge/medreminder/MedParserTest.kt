@@ -20,6 +20,13 @@ class MedParserTest {
         assertTrue(m.note.contains("Before food"))
     }
 
+    @Test fun beforeFoodOffsetShiftsTimesEarlier() {
+        val s = Slots(morning = "08:00", night = "21:00", beforeFoodOffset = 30)
+        val m = MedParser.parse("Tab Pantoprazole 40 mg 1-0-1 before food x 5 days", s).single()
+        assertEquals(listOf("07:30", "20:30"), m.times)
+        assertTrue(m.note.contains("Before food"))
+    }
+
     @Test fun dottedAbbreviation() {
         val m = one("Cap Amoxicillin 500mg t.d.s. for 7 days")
         assertEquals("Cap Amoxicillin", m.name)
@@ -91,6 +98,7 @@ class MedParserTest {
         assertEquals(30, r[0].days)
         assertEquals("Tab Shelcal 500", r[1].name)
         assertEquals(30, r[1].days)
+        assertEquals(7, MedParser.parseFollowUpDays(sheet))
     }
 
     @Test fun multiTabletAndFractionalPattern() {
@@ -116,5 +124,29 @@ class MedParserTest {
         assertEquals(4, r[1].days)
         assertTrue(r[1].note.contains("Taper step 2"))
         assertEquals(r[0].startMillis + 3 * 86_400_000L, r[1].startMillis)
+    }
+
+    @Test fun cleansTrailingFormAndUnclosedGenericSalt() {
+        val m1 = one("ALIVATE SP TAB (aceciorenac 1-0-1 after food x 5 days")
+        assertEquals("Tab ALIVATE SP", m1.name)
+        assertTrue(m1.note.contains("Composition: aceclofenac"))
+        assertTrue(m1.note.contains("After food"))
+
+        val m2 = one("CHYMORAL FQRTE TAB 1-1-1 before food x 5 days")
+        assertEquals("Tab CHYMORAL FORTE", m2.name)
+        assertTrue(m2.note.contains("Before food"))
+    }
+
+    @Test fun parsesInsulinMixtardUnitsAndSchedule() {
+        val m1 = one("Inj H MIXTARD INSULIN 30/70 12 OD x 30 days")
+        assertEquals("Inj H MIXTARD INSULIN 30/70", m1.name)
+        assertEquals("12 units", m1.dose)
+        assertTrue(m1.note.contains("Before food"))
+
+        val m2 = one("Inj Human Mixtard 30/70 12-0-8 x 30 days")
+        assertEquals("Inj Human Mixtard 30/70", m2.name)
+        assertEquals("12-0-8 units", m2.dose)
+        assertEquals(listOf("08:00", "21:00"), m2.times)
+        assertTrue(m2.note.contains("Units: 12-0-8"))
     }
 }

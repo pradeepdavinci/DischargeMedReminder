@@ -20,6 +20,13 @@ fun todayMidnight(): Long = Calendar.getInstance().apply {
 /** One alarm per medicine per daily time; each alarm re-arms the next dose when it fires. */
 object Scheduler {
     const val ACTION_DOSE = "com.discharge.medreminder.DOSE"
+    const val ACTION_FOLLOW_UP = "com.discharge.medreminder.FOLLOW_UP"
+    private const val FOLLOW_UP_REQ_CODE = 888_888
+
+    private val EMPTY_STOMACH_RE = Regex(
+        """\b(pantoprazole|pan\s*40|pan\s*d|rabeprazole|omeprazole|esomeprazole|lansoprazole|thyronorm|levothyroxine|eltroxin|mixtard|actrapid|novorapid|humalog|insulin)\b""",
+        RegexOption.IGNORE_CASE
+    )
 
     private fun reqCode(medId: Int, idx: Int, snooze: Boolean) = medId * 100 + idx + if (snooze) 50 else 0
 
@@ -30,6 +37,43 @@ object Scheduler {
     private fun hm(time: String): Pair<Int, Int> {
         val (h, mi) = time.split(":").map { it.trim().toInt() }
         return h to mi
+    }
+
+    /** Returns true if a medicine should be taken before food / on an empty stomach. */
+    fun isBeforeFoodMed(m: Med): Boolean {
+        if (m.note.contains("After food", ignoreCase = true)) return false
+        if (m.note.contains("Before food", ignoreCase = true) || m.note.contains("Empty stomach", ignoreCase = true)) return true
+        return EMPTY_STOMACH_RE.containsMatchIn(m.name)
+    }
+
+    /** Groups a dose into a clear meal/routine bucket for the Today checklist. */
+    fun mealGroup(m: Med, time: String): Pair<Int, String> {
+        val h = time.substringBefore(":").toIntOrNull() ?: 8
+        val before = isBeforeFoodMed(m)
+        return when {
+            h < 11 && before -> 1 to "🌅 Morning — Before Food (Empty Stomach)"
+            h < 11 -> 2 to "🍳 Morning — After Breakfast"
+            h in 11..15 && before -> 3 to "☀️ Afternoon — Before Lunch"
+            h in 11..15 -> 4 to "☀️ Afternoon — After Lunch"
+            h in 16..18 -> 5 to "🌆 Evening"
+            h >= 19 && before -> 6 to "🌙 Night — Before Dinner"
+            else -> 7 to "🌙 Night — After Dinner / Bedtime"
+        }
+    }
+
+    /** Human-readable course progress badge, e.g. "Day 2 of 5 (3 days left)". */
+    fun courseProgressText(m: Med, dayMidnight: Long = todayMidnight()): String {
+        val dayIndex = ((dayMidnight - m.startMillis + 43_200_000L) / 86_400_000L).toInt()
+        return when {
+            dayIndex < 0 -> "Starts in ${-dayIndex} day(s)"
+            dayIndex >= m.days -> "✓ Course finished (${m.days} days)"
+            else -> {
+                val currentDay = dayIndex + 1
+                val left = m.days - currentDay
+                if (left == 0) "Day $currentDay of ${m.days} (Last day today)"
+                else "Day $currentDay of ${m.days} ($left day(s) left)"
+            }
+        }
     }
 
     /** Next dose time strictly after [after], or null when the course has ended. */
@@ -107,7 +151,33 @@ object Scheduler {
         }
     }
 
-    fun rescheduleAll(ctx: Context) = MedStore.load(ctx).forEach { scheduleMed(ctx, it) }
+    /** Schedules a reminder at 08:30 AM on the morning of the doctor follow-up appointment. */
+    fun scheduleFollowUpVisit(ctx: Context) {
+        val am = ctx.getSystemService(AlarmManager::class.java)
+        val i = Intent(ctx, AlarmReceiver::class.java).setAction(ACTION_FOLLOW_UP)
+        val pi = PendingIntent.getBroadcast(
+            ctx, FOLLOW_UP_REQ_CODE, i,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        am.cancel(pi)
+        val dateMidnight = MedStore.followUpDate(ctx)
+        if (dateMidnight <= 0L) return
+        val triggerAt = Calendar.getInstance().apply {
+            timeInMillis = dateMidnight
+            set(Calendar.HOUR_OF_DAY, 8)
+            set(Calendar.MINUTE, 30)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        if (triggerAt > System.currentTimeMillis()) {
+            setAlarm(ctx, triggerAt, pi)
+        }
+    }
+
+    fun rescheduleAll(ctx: Context) {
+        MedStore.load(ctx).forEach { scheduleMed(ctx, it) }
+        scheduleFollowUpVisit(ctx)
+    }
 }
 
 object Doses {

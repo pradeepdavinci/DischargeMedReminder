@@ -38,6 +38,9 @@ class ReviewActivity : ComponentActivity() {
     private var editId = -1
     private var scanUris = arrayListOf<String>()
     private var previewBmp: Bitmap? = null
+    private var followUpCheck: CheckBox? = null
+    private var followUpDateMillis: Long = 0L
+    private var followUpNoteEdit: EditText? = null
     private val dateFmt = SimpleDateFormat("EEE d MMM yyyy", Locale.getDefault())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,6 +107,50 @@ class ReviewActivity : ComponentActivity() {
         container = vertical(); outer.addView(container)
         if (meds.isEmpty()) addRow(null) else meds.forEach { addRow(it) }
         if (editId <= 0) outer.addView(button("+ Add another medicine") { addRow(null) })
+
+        // Doctor follow-up checkup card when reviewing a discharge sheet
+        if (editId <= 0) {
+            val detectedDays = MedParser.parseFollowUpDays(raw)
+            val existingFollowUp = MedStore.followUpDate(this)
+            val defaultDays = detectedDays ?: 7
+            followUpDateMillis = if (detectedDays != null) {
+                todayMidnight() + detectedDays * 86_400_000L
+            } else if (existingFollowUp > 0L) {
+                existingFollowUp
+            } else {
+                todayMidnight() + defaultDays * 86_400_000L
+            }
+
+            val fuCard = card()
+            fuCard.addView(label("🏥 Doctor Follow-Up Checkup", 16f, true))
+            if (detectedDays != null) {
+                fuCard.addView(badge("Detected on sheet: follow up in $detectedDays day(s)", 0xFF2563EB.toInt()))
+            }
+            val chk = checkBox(
+                "Set a reminder for hospital follow-up visit",
+                detectedDays != null || existingFollowUp > 0L
+            )
+            followUpCheck = chk
+            fuCard.addView(chk)
+            val fuDateBtn = Button(this).apply {
+                isAllCaps = false
+                text = "Follow-up date: ${dateFmt.format(Date(followUpDateMillis))}"
+            }
+            fuDateBtn.setOnClickListener {
+                val cal = Calendar.getInstance().apply { timeInMillis = followUpDateMillis }
+                DatePickerDialog(this, { _, y, mo, d ->
+                    followUpDateMillis = Calendar.getInstance().apply { clear(); set(y, mo, d) }.timeInMillis
+                    fuDateBtn.text = "Follow-up date: ${dateFmt.format(Date(followUpDateMillis))}"
+                    chk.isChecked = true
+                }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
+            }
+            fuCard.addView(fuDateBtn)
+            val fuNote = field("Follow-up notes (e.g. Carry blood reports to OPD)", MedStore.followUpNote(this))
+            followUpNoteEdit = fuNote
+            fuCard.addView(fuNote)
+            outer.addView(fuCard)
+        }
+
         outer.addView(button("✅  Save and set reminders") { save() })
         if (raw.isNotBlank()) {
             outer.addView(label("Text read from the sheet (for reference)", 14f, true))
@@ -173,6 +220,32 @@ class ReviewActivity : ComponentActivity() {
         row.chipsBox.addView(actionsRow)
     }
 
+    private fun setMealRelation(row: Row, beforeFood: Boolean) {
+        val slots = Prefs.slots(this)
+        val offset = slots.beforeFoodOffset.coerceAtLeast(15)
+        val standardSlots = setOf(slots.morning, slots.afternoon, slots.evening, slots.night)
+        val shiftedSlots = standardSlots.map { shiftMinutes(it, -offset) }.toSet()
+        val current = parseTimesField(row.times)
+        val updatedTimes = current.map { t ->
+            if (beforeFood && t in standardSlots) shiftMinutes(t, -offset)
+            else if (!beforeFood && t in shiftedSlots) shiftMinutes(t, offset)
+            else t
+        }.distinct().sorted()
+        row.times.setText(updatedTimes.joinToString(", "))
+        refreshTimeChips(row)
+
+        val parts = row.note.text.toString().split(';')
+            .map { it.trim() }
+            .filter {
+                it.isNotEmpty() &&
+                !it.equals("Before food", ignoreCase = true) &&
+                !it.equals("After food", ignoreCase = true)
+            }
+            .toMutableList()
+        parts.add(0, if (beforeFood) "Before food" else "After food")
+        row.note.setText(parts.joinToString("; "))
+    }
+
     private fun addRow(m: Med?) {
         val c = card()
         val startBtn = Button(this).apply { isAllCaps = false }
@@ -182,7 +255,7 @@ class ReviewActivity : ComponentActivity() {
         val row = Row(
             c,
             field("Medicine (e.g. Tab Pantoprazole)", m?.name ?: ""),
-            field("Dose (e.g. 40 mg / 1 tablet)", m?.dose ?: ""),
+            field("Dose (e.g. 40 mg / 12 units)", m?.dose ?: ""),
             timesField,
             chipsBox,
             field("Every N days (1 = daily)", (m?.every ?: 1).toString(), numeric = true),
@@ -206,6 +279,10 @@ class ReviewActivity : ComponentActivity() {
         c.addView(label("Reminder times", 13f, true))
         c.addView(row.chipsBox)
         c.addView(row.times)
+        val foodRow = horizontal()
+        foodRow.addView(button("🌅 Before food (-30m)") { setMealRelation(row, true) }, weighted())
+        foodRow.addView(button("🍳 After food") { setMealRelation(row, false) }, weighted())
+        c.addView(foodRow)
         val r2 = horizontal()
         val left = vertical().apply { addView(label("Every N days", 13f, true)); addView(row.every) }
         val right = vertical().apply { addView(label("Number of days", 13f, true)); addView(row.days) }
@@ -252,6 +329,13 @@ class ReviewActivity : ComponentActivity() {
         }
         MedStore.save(this, all)
         out.forEach { Scheduler.scheduleMed(this, it) }
+
+        if (editId <= 0 && followUpCheck?.isChecked == true && followUpDateMillis > 0L) {
+            val noteText = followUpNoteEdit?.text?.toString().orEmpty()
+            MedStore.saveFollowUpDate(this, followUpDateMillis, noteText)
+            Scheduler.scheduleFollowUpVisit(this)
+        }
+
         toast(if (editId > 0) "Medicine updated" else "Reminders set for ${out.size} medicine(s)")
         finish()
     }
